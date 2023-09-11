@@ -210,7 +210,7 @@ class Bridge:
                 print('Client ', self.client_address, ' disconnected')
                 self.close_client()
         if fd == self.uart:
-            data = self.uart.read(64)
+            data = self.uart.read(self.uart.any())
             if data is not None:
                 self.ring_buffer.put(data)
             if self.state == 'authenticated' and self.ring_buffer.has_data():
