@@ -32,7 +32,7 @@ def parse_bind_address(addr, default=None):
     port = int(args[1])
     return host, port
 
-class RINGBUFFER:
+class RingBuffer:
     def __init__(self, size):
         self.data = bytearray(size)
         self.size = size
@@ -58,15 +58,6 @@ class RINGBUFFER:
                 if self.index_get == 0:
                     self.index_get = 1
 
-    def putc(self, value):
-        next_index = (self.index_put + 1) % self.size
-        self.data[self.index_put] = value
-        self.index_put = next_index
-        # check for overflow
-        if self.index_get == self.index_put:
-            self.index_get = (self.index_get + 1) % self.size
-        return value
-
     def get(self, numbytes):
         data = bytearray()
         while len(data) < numbytes:
@@ -81,14 +72,6 @@ class RINGBUFFER:
             if self.index_get == self.index_put:
                 break
         return data
-
-    def getc(self):
-        if not self.has_data():
-            return None  ## buffer empty
-        else:
-            value = self.data[self.index_get]
-            self.index_get = (self.index_get + 1) % self.size
-            return value
 
     def has_data(self):
         return self.index_get != self.index_put
@@ -125,7 +108,7 @@ class Bridge:
         self.bind_port = self.address[1]
         self.client = None
         self.client_address = None
-        self.ring_buffer = RINGBUFFER(16 * 1024)
+        self.ring_buffer = RingBuffer(16 * 1024)
         self.cur_line = bytearray()
         self.state = 'listening'
         self.uart = UART(self.config['uart'])
