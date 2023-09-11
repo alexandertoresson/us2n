@@ -175,7 +175,7 @@ ACME Instruments, C4, 122393-2, 10-0-1
 ```
 * Using socat to bridge back to a tty
 ```bash
-$ socat pty,link=$HOME/dev/ttyV0,b9600,waitslave tcp:<MCU Wifi IP>:8000
+$ socat pty,link=$HOME/dev/ttyV0,b9600,waitslave tcp:<MCU Wifi IP>:8000,nodelay
 ```
 * Connect to the virtual tty with miniterm.py
 ```bash
@@ -185,7 +185,19 @@ Or use screen!
 ```bash
 $ screen dev/ttyV0 9600
 ```
-That's all folks! Unless you want SSL:
+That's all folks!
+
+## Improved latency
+
+Naturally, the baud rate specified to socat and screen/miniterm.py should be at least
+as high as that of the UART, but you can set it higher than that.
+
+Thus for optimal latency, use an as high baud rate as possible, both for socat and
+screen/miniterm.py. You can find out the supported baud rates on your system via the
+following command:
+```bash
+$ socat -hh |grep ' b[1-9]'
+```
 
 ## SSL usage
 
@@ -198,7 +210,7 @@ $ openssl s_client -connect <MCU CN>:8000 -cert client.pem -CAfile server.crt
 But to get a proper tty, use socat:
 
 ```bash
-$ socat pty,link=$HOME/dev/ttyV0,b9600,waitslave OPENSSL-CONNECT:<MCU CN>:8000,cert=client.pem,cafile=server.crt
+$ socat pty,link=$HOME/dev/ttyV0,b9600,waitslave OPENSSL-CONNECT:<MCU CN>:8000,cert=client.pem,cafile=server.crt,nodelay
 ```
 
 Then use miniterm.py or screen as before.
