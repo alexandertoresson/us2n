@@ -32,6 +32,24 @@ def parse_bind_address(addr, default=None):
     port = int(args[1])
     return host, port
 
+class LineReader:
+    def __init__(self, maxsize):
+        self.data = bytearray()
+        self.maxsize = maxsize
+
+    def feed(self, data):
+        for i, c in enumerate(data):
+            if c == 13 or c == 10:
+                ret = self.data
+                self.data = bytearray()
+                return ret, data[i+1:]
+            elif c == 8 or c == 127:
+                if len(self.data):
+                    self.data = self.data[:-1]
+            elif len(self.data) < self.maxsize:
+                self.data.append(c)
+        return None, b''
+
 class RingBuffer:
     def __init__(self, size):
         self.data = bytearray(size)
@@ -172,22 +190,18 @@ class Bridge:
             data = self.recv(self.client, 4096)
             if data:
                 if self.state == 'enterpassword':
-                    while len(data):
-                        c = data[0:1]
-                        data = data[1:]
-                        if c == b'\n' or c == b'\r':
-                            print("Received password {0}".format(self.password))
-                            if self.password.decode('utf-8') == self.config['auth']['password']:
+                    while len(data) > 0:
+                        password, data = self.passwordreader.feed(data)
+                        if password is not None:
+                            print("Received password {0}".format(password))
+                            if password.decode('utf-8') == self.config['auth']['password']:
                                 self.sendall(self.client, "\r\nAuthentication succeeded\r\n")
                                 self.state = 'authenticated'
                                 self.ring_buffer.rewind()
                                 fd = self.uart # Send all uart data
                                 break
                             else:
-                                self.password = b""
                                 self.sendall(self.client, "\r\nAuthentication failed\r\npassword: ")
-                        else:
-                                self.password += c
                 if self.state == 'authenticated':
                     print('TCP({0})->UART({1}) {2}'.format(self.bind_port,
                                                            self.uart_port, data))
@@ -229,7 +243,7 @@ class Bridge:
             sslconf['cert_reqs'] = ussl.CERT_OPTIONAL
             self.client = ussl.wrap_socket(self.client, server_side=True, **sslconf)
         self.state = 'enterpassword' if 'auth' in self.config else 'authenticated'
-        self.password = b""
+        self.passwordreader = LineReader(256)
         if self.state == 'enterpassword':
             self.sendall(self.client, "password: ")
             print("Prompting for password")
