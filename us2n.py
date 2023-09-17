@@ -6,6 +6,7 @@ import select
 import socket
 import machine
 import network
+import sys
 
 print_ = print
 VERBOSE = 1
@@ -38,17 +39,21 @@ class LineReader:
         self.maxsize = maxsize
 
     def feed(self, data):
+        echo = bytearray()
         for i, c in enumerate(data):
             if c == 13 or c == 10:
                 ret = self.data
                 self.data = bytearray()
-                return ret, data[i+1:]
+                echo.append(c)
+                return ret, data[i+1:], echo
             elif c == 8 or c == 127:
                 if len(self.data):
+                    echo.extend(b'\x08\x1b[K')
                     self.data = self.data[:-1]
             elif len(self.data) < self.maxsize:
+                echo.append(c)
                 self.data.append(c)
-        return None, b''
+        return None, b'', echo
 
 class RingBuffer:
     def __init__(self, size):
@@ -182,6 +187,26 @@ class Bridge:
             # SSL-wrapped sockets don't have sendall(), use write() instead
             return sock.write(bytes)
 
+    def shortcommand(self, cmd):
+        self.state = 'authenticated'
+        if cmd == b'\x02':
+            self.uart.write(cmd)
+        elif cmd == b'd':
+            self.client.close()
+        elif cmd == b'x':
+            sys.exit()
+
+    def longcommand(self, cmd):
+        cmd = cmd.split(b' ')
+        self.state = 'authenticated'
+        if cmd[0] == b'disconnect':
+            self.client.close()
+        elif cmd[0] == b'restart':
+            sys.exit()
+        elif cmd[0] == b'logout':
+            self.state = 'enterpassword'
+            self.sendall(self.client, "\r\nLogout\r\npassword: ")
+
     def handle(self, fd):
         if fd == self.tcp:
             self.close_client()
@@ -189,9 +214,9 @@ class Bridge:
         elif fd == self.client:
             data = self.recv(self.client, 4096)
             if data:
-                if self.state == 'enterpassword':
-                    while len(data) > 0:
-                        password, data = self.passwordreader.feed(data)
+                while len(data) > 0:
+                    if self.state == 'enterpassword':
+                        password, data, _ = self.passwordreader.feed(data)
                         if password is not None:
                             print("Received password {0}".format(password))
                             if password.decode('utf-8') == self.config['auth']['password']:
@@ -199,13 +224,34 @@ class Bridge:
                                 self.state = 'authenticated'
                                 self.ring_buffer.rewind()
                                 fd = self.uart # Send all uart data
-                                break
                             else:
                                 self.sendall(self.client, "\r\nAuthentication failed\r\npassword: ")
-                if self.state == 'authenticated':
-                    print('TCP({0})->UART({1}) {2}'.format(self.bind_port,
-                                                           self.uart_port, data))
-                    self.uart.write(data)
+                    elif self.state == 'authenticated':
+                        for i, c in enumerate(data):
+                            if c == 2:
+                                self.state = 'escapereceived'
+                                i -= 1
+                                break
+                        print('TCP({0})->UART({1}) {2}'.format(self.bind_port,
+                                                               self.uart_port, data[:i+1]))
+                        self.uart.write(data[:i+1])
+                        data = data[i+1:]
+                        if self.state == 'escapereceived':
+                            # Remove the escape
+                            data = data[1:]
+                    elif self.state == 'escapereceived':
+                        if data[0:1] == b':':
+                            self.state = 'entercommand'
+                            data = data[1:]
+                            self.sendall(self.client, "\r\n:")
+                        else:
+                            self.shortcommand(data[0:1])
+                    elif self.state == 'entercommand':
+                        command, data, echo = self.cmdreader.feed(data)
+                        self.sendall(self.client, echo)
+                        if command is not None:
+                            print("Received command {0}".format(command))
+                            self.longcommand(command)
             else:
                 print('Client ', self.client_address, ' disconnected')
                 self.close_client()
@@ -244,6 +290,7 @@ class Bridge:
             self.client = ussl.wrap_socket(self.client, server_side=True, **sslconf)
         self.state = 'enterpassword' if 'auth' in self.config else 'authenticated'
         self.passwordreader = LineReader(256)
+        self.cmdreader = LineReader(1024)
         if self.state == 'enterpassword':
             self.sendall(self.client, "password: ")
             print("Prompting for password")
