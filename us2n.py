@@ -108,10 +108,14 @@ class RingBuffer:
 def UART(config):
     config = dict(config)
     uart_type = config.pop('type') if 'type' in config.keys() else 'hw'
+    if 'tx' in config:
+        config['tx'] = machine.Pin(config['tx'])
+    if 'rx' in config:
+        config['rx'] = machine.Pin(config['rx'])
     port = config.pop('port')
     if uart_type == 'SoftUART':
         print('Using SoftUART...')
-        uart = machine.SoftUART(machine.Pin(config.pop('tx')),machine.Pin(config.pop('rx')),timeout=config.pop('timeout'),timeout_char=config.pop('timeout_char'),baudrate=config.pop('baudrate'))
+        uart = machine.SoftUART(config.pop('tx'),config.pop('rx'),timeout=config.pop('timeout'),timeout_char=config.pop('timeout_char'),baudrate=config.pop('baudrate'))
     else:
         print('Using HW UART...')
         uart = machine.UART(port)
