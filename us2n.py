@@ -450,9 +450,6 @@ def config_network(config, name):
 def config_verbosity(config):
     global VERBOSE
     VERBOSE = config.setdefault('verbose', 1)
-    for bridge in config.get('bridges'):
-        if bridge.get('uart', {}).get('port', None) == 0:
-            VERBOSE = 0
 
 
 def server(config_filename='us2n.json'):
