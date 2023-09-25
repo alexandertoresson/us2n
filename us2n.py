@@ -204,15 +204,24 @@ class Bridge:
         return b''
 
     def longcommand(self, cmd):
+        redraw = False
         cmd = cmd.split(b' ')
         self.state = 'authenticated'
         if cmd[0] == b'disconnect':
             self.client.close()
+            return False # Sending anything will cause an exception
         elif cmd[0] == b'restart':
             sys.exit()
+        elif cmd[0] == b'redraw':
+            redraw = True
         elif cmd[0] == b'logout':
             self.state = 'enterpassword'
-            self.sendall(self.client, "\r\nLogout\r\npassword: ")
+            self.sendall(self.client, "\x1b[0m\r\nLogout\r\npassword: ")
+        else:
+            self.state = 'waitkey'
+            self.sendall(self.client, f"\r\nUnknown command '{cmd[0].decode('utf-8')}'")
+        self.sendall(self.client, "\x1b[0m")
+        return redraw
 
     def handle(self, fd):
         if fd == self.tcp:
@@ -227,9 +236,8 @@ class Bridge:
                         if password is not None:
                             print("Received password {0}".format(password))
                             if password.decode('utf-8') == self.config['auth']['password']:
-                                self.sendall(self.client, "\r\nAuthentication succeeded\r\n")
                                 self.state = 'authenticated'
-                                self.ring_buffer.rewind()
+                                self.redraw()
                                 fd = self.uart # Send all uart data
                             else:
                                 self.sendall(self.client, "\r\nAuthentication failed\r\npassword: ")
@@ -252,7 +260,7 @@ class Bridge:
                         if data[0:1] == b':':
                             self.state = 'entercommand'
                             data = data[1:]
-                            self.sendall(self.client, "\r\n:")
+                            self.sendall(self.client, "\r\n\x1b[7m:")
                         else:
                             echo = self.shortcommand(data[0:1])
                             data = echo + data[1:]
@@ -261,7 +269,14 @@ class Bridge:
                         self.sendall(self.client, echo)
                         if command is not None:
                             print("Received command {0}".format(command))
-                            self.longcommand(command)
+                            if self.longcommand(command):
+                                self.redraw()
+                                fd = self.uart # Send all uart data
+                    elif self.state == 'waitkey':
+                        data = data[1:]
+                        self.redraw()
+                        self.state = 'authenticated'
+                        fd = self.uart # Send all uart data
             else:
                 print('Client ', self.client_address, ' disconnected')
                 self.close_client()
