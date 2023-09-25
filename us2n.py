@@ -139,6 +139,7 @@ class Bridge:
         self.cur_line = bytearray()
         self.state = 'listening'
         self.uart = UART(self.config['uart'])
+        self.escape = self.config.get('escape', 2)
         print('UART opened ', self.uart)
         print(self.config)
 
@@ -193,12 +194,14 @@ class Bridge:
 
     def shortcommand(self, cmd):
         self.state = 'authenticated'
-        if cmd == b'\x02':
-            self.uart.write(cmd)
+        if cmd == bytes([self.escape]):
+            self.state = 'echochar'
+            return bytes([self.escape])
         elif cmd == b'd':
             self.client.close()
         elif cmd == b'x':
             sys.exit()
+        return b''
 
     def longcommand(self, cmd):
         cmd = cmd.split(b' ')
@@ -230,9 +233,9 @@ class Bridge:
                                 fd = self.uart # Send all uart data
                             else:
                                 self.sendall(self.client, "\r\nAuthentication failed\r\npassword: ")
-                    elif self.state == 'authenticated':
+                    elif self.state == 'authenticated' or self.state == 'echochar':
                         for i, c in enumerate(data):
-                            if c == 2:
+                            if c == self.escape and not (i == 0 and self.state == 'echochar'):
                                 self.state = 'escapereceived'
                                 i -= 1
                                 break
@@ -243,13 +246,16 @@ class Bridge:
                         if self.state == 'escapereceived':
                             # Remove the escape
                             data = data[1:]
+                        else:
+                            self.state = 'authenticated'
                     elif self.state == 'escapereceived':
                         if data[0:1] == b':':
                             self.state = 'entercommand'
                             data = data[1:]
                             self.sendall(self.client, "\r\n:")
                         else:
-                            self.shortcommand(data[0:1])
+                            echo = self.shortcommand(data[0:1])
+                            data = echo + data[1:]
                     elif self.state == 'entercommand':
                         command, data, echo = self.cmdreader.feed(data)
                         self.sendall(self.client, echo)
