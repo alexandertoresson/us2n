@@ -125,8 +125,9 @@ def UART(config):
 
 class Bridge:
 
-    def __init__(self, config):
+    def __init__(self, server, config):
         super().__init__()
+        self.server = server
         self.config = config
         self.uart = None
         self.uart_port = config['uart']['port']
@@ -192,6 +193,10 @@ class Bridge:
             # SSL-wrapped sockets don't have sendall(), use write() instead
             return sock.write(bytes)
 
+    def redraw(self):
+        self.sendall(self.client, "\x1b[2J\x1b[H")
+        self.ring_buffer.rewind()
+
     def shortcommand(self, cmd):
         self.state = 'authenticated'
         if cmd == bytes([self.escape]):
@@ -205,21 +210,40 @@ class Bridge:
 
     def longcommand(self, cmd):
         redraw = False
-        cmd = cmd.split(b' ')
+        args = cmd.split(b' ')
+        cmd = args.pop(0)
         self.state = 'authenticated'
-        if cmd[0] == b'disconnect':
+        if cmd == b'disconnect':
             self.client.close()
             return False # Sending anything will cause an exception
-        elif cmd[0] == b'restart':
+        elif cmd == b'restart':
             sys.exit()
-        elif cmd[0] == b'redraw':
+        elif cmd == b'redraw':
             redraw = True
-        elif cmd[0] == b'logout':
+        elif cmd == b'logout':
             self.state = 'enterpassword'
             self.sendall(self.client, "\x1b[0m\r\nLogout\r\npassword: ")
+        elif cmd == b'conf':
+            subcmd = args.pop(0)
+            if subcmd == b'get':
+                output = self.server.get_conf(args)
+            elif subcmd == b'set':
+                output = self.server.set_conf(args)
+            elif subcmd == b'del':
+                output = self.server.del_conf(args)
+            elif subcmd == b'save':
+                output = self.server.save_conf(args)
+            else:
+                output = f"Unknown config command '{subcmd.decode('utf-8')}'"
+            if len(output):
+                self.sendall(self.client, "\r\n")
+                self.sendall(self.client, output)
+                self.state = 'waitkey'
+            else:
+                redraw = True
         else:
             self.state = 'waitkey'
-            self.sendall(self.client, f"\r\nUnknown command '{cmd[0].decode('utf-8')}'")
+            self.sendall(self.client, f"\r\nUnknown command '{cmd.decode('utf-8')}'")
         self.sendall(self.client, "\x1b[0m")
         return redraw
 
@@ -367,7 +391,7 @@ class S2NServer:
     def bind(self):
         bridges = []
         for config in self.config['bridges']:
-            bridge = Bridge(config)
+            bridge = Bridge(self, config)
             bridge.bind()
             bridges.append(bridge)
         return bridges
@@ -391,6 +415,104 @@ class S2NServer:
             for bridge in bridges:
                 bridge.close()
 
+    def get_conf_context(self, ctx, subset, output):
+        if '.' in ctx:
+            idx, rest = ctx.split('.', 1)
+        else:
+            idx = ctx
+            rest = ''
+        if len(rest):
+            if isinstance(subset, dict):
+                if idx in subset:
+                    return self.get_conf_context(rest, subset[idx], output)
+                else:
+                    output.extend(f'Unable to find idx {idx}\r\n')
+                    return None, None
+            elif isinstance(subset, list):
+                idx = int(idx)
+                if idx < len(subset):
+                    return self.get_conf_context(rest, subset[idx], output)
+                else:
+                    output.extend(f'Unable to find idx {idx}\r\n')
+                    return None, None
+            else:
+                output.extend(f'Neither list nor dict\r\n')
+                return None, None
+        else:
+            if isinstance(subset, list):
+                idx = int(idx)
+            return subset, idx
+
+    def iter_conf_recursive(self, ctx, subset, output):
+        if isinstance(subset, dict):
+            iter = sorted(subset.items())
+        elif isinstance(subset, list):
+            iter = enumerate(subset)
+        for key, value in iter:
+            if isinstance(value, int) or isinstance(value, float):
+                output.extend(f'{ctx}{key} = {value}\r\n')
+            elif isinstance(value, str):
+                output.extend(f'{ctx}{key} = "{value}"\r\n')
+            elif value is None:
+                output.extend(f'{ctx}{key} = null\r\n')
+            else:
+                self.iter_conf_recursive(f'{ctx}{key}.', value, output)
+
+    def get_conf(self, args):
+        output = bytearray()
+        if len(args) == 0:
+            self.iter_conf_recursive("", self.config, output)
+        elif len(args) == 1:
+            arg = args[0].decode('utf-8')
+            subset, idx = self.get_conf_context(arg, self.config, output)
+            if subset is not None and idx is not None:
+                if (isinstance(subset, dict) and not idx in subset) or \
+                   (isinstance(subset, list) and idx >= len(subset)):
+                    output.extend(f'Unable to find idx {idx}\r\n')
+                else:
+                    value = subset[idx]
+                    if value is None:
+                        output.extend('null\r\n')
+                    elif isinstance(value, str):
+                        output.extend(f'"{value}"\r\n')
+                    elif isinstance(value, int) or isinstance(value, float):
+                        output.extend(f'{value}\r\n')
+                    else:
+                        self.iter_conf_recursive(arg + '.', value, output)
+        else:
+            output.extend("Expected 1 argument\r\n")
+        return output
+
+    def set_conf(self, args):
+        output = bytearray()
+        if len(args) == 2:
+            subset, idx = self.get_conf_context(args[0].decode('utf-8'), self.config, output)
+            if subset is not None and idx is not None:
+                subset[idx] = json.loads(args[1])
+        else:
+            output.extend("Expected 2 arguments\r\n")
+        return output
+
+    def del_conf(self, args):
+        output = bytearray()
+        if len(args) == 1:
+            subset, idx = self.get_conf_context(args[0].decode('utf-8'), self.config, output)
+            if subset is not None and idx is not None:
+                if (isinstance(subset, dict) and not idx in subset) or \
+                   (isinstance(subset, list) and idx >= len(subset)):
+                    output.extend(f'Unable to find idx {idx}\r\n')
+                else:
+                    del subset[idx]
+        else:
+            output.extend("Expected 1 argument1\r\n")
+        return output
+
+    def save_conf(self, args):
+        output = bytearray()
+        with open('us2n.json', 'w') as f:
+            json.dump(self.config, f)
+        output.extend('us2n.json written\r\n')
+        return output
 
 def config_lan(config, name):
     # For a board which has LAN
