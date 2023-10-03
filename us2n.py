@@ -297,9 +297,12 @@ class Bridge:
                                 self.redraw()
                                 fd = self.uart # Send all uart data
                     elif self.state == 'waitkey':
+                        if data[0] == self.escape:
+                            self.state = 'escapereceived'
+                        else:
+                            self.state = 'authenticated'
                         data = data[1:]
                         self.redraw()
-                        self.state = 'authenticated'
                         fd = self.uart # Send all uart data
             else:
                 print('Client ', self.client_address, ' disconnected')
