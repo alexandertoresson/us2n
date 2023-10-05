@@ -452,12 +452,8 @@ class S2NServer:
         elif isinstance(subset, list):
             iter = enumerate(subset)
         for key, value in iter:
-            if isinstance(value, int) or isinstance(value, float):
-                output.extend(f'{ctx}{key} = {value}\r\n')
-            elif isinstance(value, str):
-                output.extend(f'{ctx}{key} = "{value}"\r\n')
-            elif value is None:
-                output.extend(f'{ctx}{key} = null\r\n')
+            if isinstance(value, int) or isinstance(value, float) or isinstance(value, str) or value is None:
+                output.extend(f'{ctx}{key} = {json.dumps(value)}\r\n')
             else:
                 self.iter_conf_recursive(f'{ctx}{key}.', value, output)
 
