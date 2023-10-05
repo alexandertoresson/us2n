@@ -33,6 +33,39 @@ def parse_bind_address(addr, default=None):
     port = int(args[1])
     return host, port
 
+class StreamMatcher:
+    def __init__(self, **kwargs):
+        self.set(**kwargs)
+
+    def set(self, match=None, mode='off', output=''):
+        self.match = match
+        if isinstance(self.match, str):
+            self.match = self.match.encode('utf-8')
+        self.mode = mode
+        self.output = output
+        self.state = 0
+
+    def feed(self, data):
+        if not isinstance(self.match, bytes) or self.mode == 'off':
+            return bytes(), self.mode
+        echo = bytearray()
+        state = self.state
+        match = self.match
+        mode = self.mode
+        for c in data:
+            if match[state] == c:
+                state += 1
+            else:
+                state = 0
+            if state == len(match):
+                state = 0
+                echo.extend(self.output)
+                if mode == 'oneshot':
+                    mode = 'off'
+                    break
+        self.state = state
+        return echo, mode
+
 class LineReader:
     def __init__(self, maxsize):
         self.data = bytearray()
@@ -125,10 +158,11 @@ def UART(config):
 
 class Bridge:
 
-    def __init__(self, server, config):
+    def __init__(self, server, config, idx):
         super().__init__()
         self.server = server
         self.config = config
+        self.idx = idx
         self.uart = None
         self.uart_port = config['uart']['port']
         self.tcp = None
@@ -138,6 +172,7 @@ class Bridge:
         self.client_address = None
         self.ring_buffer = RingBuffer(16 * 1024)
         self.cur_line = bytearray()
+        self.matcher = StreamMatcher(**self.config.get('trigger', {}))
         self.state = 'listening'
         self.uart = UART(self.config['uart'])
         self.escape = self.config.get('escape', 2)
@@ -311,6 +346,12 @@ class Bridge:
             data = self.uart.read(self.uart.any())
             if data is not None:
                 self.ring_buffer.put(data)
+                echo, mode = self.matcher.feed(data)
+                self.uart.write(echo)
+                if mode != self.matcher.mode:
+                    self.matcher.set(mode = mode)
+                    self.server.set_conf([f"bridges.{self.idx}.trigger.mode".encode('utf-8'), json.dumps(mode)])
+                    self.server.save_conf()
             if self.state == 'authenticated' and self.ring_buffer.has_data():
                 data = self.ring_buffer.get(4096)
                 print('UART({0})->TCP({1}) {2}'.format(self.uart_port,
@@ -393,8 +434,8 @@ class S2NServer:
 
     def bind(self):
         bridges = []
-        for config in self.config['bridges']:
-            bridge = Bridge(self, config)
+        for idx, config in enumerate(self.config['bridges']):
+            bridge = Bridge(self, config, idx)
             bridge.bind()
             bridges.append(bridge)
         return bridges
@@ -506,7 +547,7 @@ class S2NServer:
             output.extend("Expected 1 argument1\r\n")
         return output
 
-    def save_conf(self, args):
+    def save_conf(self, args=[]):
         output = bytearray()
         with open('us2n.json', 'w') as f:
             json.dump(self.config, f)
