@@ -459,7 +459,7 @@ class S2NServer:
             for bridge in bridges:
                 bridge.close()
 
-    def get_conf_context(self, ctx, subset, output):
+    def get_conf_context(self, ctx, subset, output, create=False):
         if '.' in ctx:
             idx, rest = ctx.split('.', 1)
         else:
@@ -470,15 +470,23 @@ class S2NServer:
                 if idx in subset:
                     return self.get_conf_context(rest, subset[idx], output)
                 else:
-                    output.extend(f'Unable to find idx {idx}\r\n')
-                    return None, None
+                    if create:
+                        subset[idx] = {}
+                        return self.get_conf_context(rest, subset[idx], output)
+                    else:
+                        output.extend(f'Unable to find idx {idx}\r\n')
+                        return None, None
             elif isinstance(subset, list):
                 idx = int(idx)
                 if idx < len(subset):
                     return self.get_conf_context(rest, subset[idx], output)
                 else:
-                    output.extend(f'Unable to find idx {idx}\r\n')
-                    return None, None
+                    if create and idx == len(subset):
+                        subset.append({})
+                        return self.get_conf_context(rest, subset[idx], output)
+                    else:
+                        output.extend(f'Unable to find idx {idx}\r\n')
+                        return None, None
             else:
                 output.extend(f'Neither list nor dict\r\n')
                 return None, None
@@ -525,12 +533,10 @@ class S2NServer:
 
     def set_conf(self, args):
         output = bytearray()
-        if len(args) == 2:
-            subset, idx = self.get_conf_context(args[0].decode('utf-8'), self.config, output)
+        if len(args) >= 2:
+            subset, idx = self.get_conf_context(args[0].decode('utf-8'), self.config, output, create=True)
             if subset is not None and idx is not None:
-                subset[idx] = json.loads(args[1])
-        else:
-            output.extend("Expected 2 arguments\r\n")
+                subset[idx] = json.loads(b' '.join(args[1:]))
         return output
 
     def del_conf(self, args):
