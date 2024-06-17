@@ -7,6 +7,13 @@ import socket
 import machine
 import network
 import sys
+from machine import Pin
+
+led = None
+
+def led_toggle():
+    if led is not None:
+        led.toggle()
 
 print_ = print
 VERBOSE = 1
@@ -435,6 +442,7 @@ class S2NServer:
 
     def serve_forever(self):
         while True:
+            led_toggle()
             config_network(self.config.get('wlan'), self.config.get('name'))
             try:
                 self._serve_forever()
@@ -457,6 +465,7 @@ class S2NServer:
         return bridges
 
     def _serve_forever(self):
+        led_toggle()
         bridges = self.bind()
 
         try:
@@ -465,6 +474,7 @@ class S2NServer:
                 for bridge in bridges:
                     bridge.fill(fds)
                 rlist, _, xlist = select.select(fds, (), fds)
+                led_toggle()
                 if xlist:
                     print('Errors. bailing out')
                     break
@@ -605,6 +615,7 @@ def WLANStation(config, name):
             sta.active(True)
             sta.connect(essid, password)
             print('Connecting to WiFi...')
+            led_toggle()
             n, ms = 20, 250
             t = n*ms
             while not sta.isconnected() and n > 0:
@@ -662,6 +673,12 @@ def server(config_filename='us2n.json'):
     VERBOSE = config.setdefault('verbose', 1)
     name = config.setdefault('name', 'Tiago-ESP32')
     config_verbosity(config)
+    try:
+        global led
+        led = Pin(config.get('led', 'LED'), Pin.OUT)
+    except:
+        pass
     print(50*'=')
     print('Welcome to ESP8266/32 serial <-> tcp bridge\n')
+    led_toggle()
     return S2NServer(config)
