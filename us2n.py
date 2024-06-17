@@ -1,5 +1,6 @@
 # us2n.py
 
+import gc
 import json
 import time
 import select
@@ -469,6 +470,7 @@ class S2NServer:
         bridges = self.bind()
 
         try:
+            gc.collect()
             while True:
                 fds = []
                 for bridge in bridges:
