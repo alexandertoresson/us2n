@@ -599,6 +599,11 @@ def config_wlan(config, name):
 
 
 def WLANStation(config, name):
+    try:
+        import rp2
+        rp2.country(config.get('country', 'US'))
+    except:
+        pass
     if config is None:
         return
     config.setdefault('connection_attempts', -1)
