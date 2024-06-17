@@ -430,7 +430,6 @@ class S2NServer:
             try:
                 import usyslog
                 import io
-                import sys
                 stringio = io.StringIO()
                 sys.print_exception(e, stringio)
                 stringio.seek(0)
@@ -451,7 +450,6 @@ class S2NServer:
                 print('Ctrl-C pressed. Bailing out')
                 break
             except BaseException as e:
-                import sys
                 sys.print_exception(e)
                 self.report_exception(e)
                 time.sleep(1)
