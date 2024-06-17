@@ -166,8 +166,13 @@ class Bridge:
         self.uart = None
         self.uart_port = config['uart']['port']
         self.tcp = None
-        self.address = parse_bind_address(config['tcp']['bind'])
-        self.bind_port = self.address[1]
+        self.address = parse_bind_address(config['tcp'].get('bind', None))
+        if self.address is not None:
+            self.bind_port = self.address[1]
+            self.mode = 'listen'
+        else:
+            self.address = config['tcp'].get('connect', None)
+            self.mode = 'connect'
         self.client = None
         self.client_address = None
         self.ring_buffer = RingBuffer(16 * 1024)
@@ -178,16 +183,6 @@ class Bridge:
         self.escape = self.config.get('escape', 2)
         print('UART opened ', self.uart)
         print(self.config)
-
-    def bind(self):
-        tcp = socket.socket()
-        tcp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    #    tcp.setblocking(False)
-        tcp.bind(self.address)
-        tcp.listen(5)
-        print('Bridge listening at TCP({0}) for UART({1})'
-              .format(self.bind_port, self.uart_port))
-        self.tcp = tcp
         if 'ssl' in self.config:
             import ntptime
             ntptime.host = "pool.ntp.org"
@@ -202,7 +197,24 @@ class Bridge:
                 print(time.gmtime())
                 break
 
-        return tcp
+    def bind(self):
+        if self.mode == 'listen':
+            tcp = socket.socket()
+            tcp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        #    tcp.setblocking(False)
+            tcp.bind(self.address)
+            tcp.listen(5)
+            print('Bridge listening at TCP({0}) for UART({1})'
+                  .format(self.bind_port, self.uart_port))
+            self.tcp = tcp
+            return tcp
+        elif self.mode == 'connect':
+            self.tcp = None
+            self.client = socket.socket()
+            print('Bridge connecting to TCP({0}) for UART({1})'
+                  .format(self.address, self.uart_port))
+            self.client.connect(socket.getaddrinfo(*self.address)[0][-1])
+            self.open_client()
 
     def fill(self, fds):
         if self.uart is not None:
@@ -306,7 +318,7 @@ class Bridge:
                                 self.state = 'escapereceived'
                                 i -= 1
                                 break
-                        print('TCP({0})->UART({1}) {2}'.format(self.bind_port,
+                        print('TCP({0})->UART({1}) {2}'.format(self.address,
                                                                self.uart_port, data[:i+1]))
                         self.uart.write(data[:i+1])
                         data = data[i+1:]
@@ -355,7 +367,7 @@ class Bridge:
             if self.state == 'authenticated' and self.ring_buffer.has_data():
                 data = self.ring_buffer.get(4096)
                 print('UART({0})->TCP({1}) {2}'.format(self.uart_port,
-                                                       self.bind_port, data))
+                                                       self.address, data))
                 self.sendall(self.client, data)
 
     def close_client(self):
@@ -365,10 +377,13 @@ class Bridge:
             self.client = None
             self.client_address = None
         self.state = 'listening'
+        if self.mode == 'connect':
+            self.bind()
 
     def open_client(self):
-        self.client, self.client_address = self.tcp.accept()
-        print('Accepted connection from ', self.client_address)
+        if self.mode == 'listen':
+            self.client, self.client_address = self.tcp.accept()
+            print('Accepted connection from ', self.client_address)
         if 'ssl' in self.config:
             import ussl
             import ubinascii
@@ -379,8 +394,9 @@ class Bridge:
                     with open(sslconf[key], "rb") as file:
                         sslconf[key] = file.read()
             # TODO: Setting CERT_REQUIRED produces MBEDTLS_ERR_X509_CERT_VERIFY_FAILED
-            sslconf['cert_reqs'] = ussl.CERT_OPTIONAL
-            self.client = ussl.wrap_socket(self.client, server_side=True, **sslconf)
+            sslconf['cert_reqs'] = ussl.CERT_REQUIRED if sslconf.get('strict', False) else ussl.CERT_OPTIONAL
+            sslconf.pop('strict', None)
+            self.client = ussl.wrap_socket(self.client, server_side=(self.mode=='listen'), **sslconf)
         self.state = 'enterpassword' if 'auth' in self.config else 'authenticated'
         self.passwordreader = LineReader(256)
         self.cmdreader = LineReader(1024)
