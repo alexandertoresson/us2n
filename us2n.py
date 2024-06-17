@@ -618,6 +618,7 @@ def WLANStation(config, name):
             sta.disconnect()
             sta.active(False)
             sta.active(True)
+            sta.config(pm = network.WLAN.PM_NONE)
             sta.connect(essid, password)
             print('Connecting to WiFi...')
             led_toggle()
